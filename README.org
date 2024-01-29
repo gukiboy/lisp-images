@@ -1,0 +1,8 @@
+#+title: Lisp Images
+
+What are Lisp Images and how do they work?
+
+Use the following command to start a terminal with SBCL
+#+begin_src bash
+  nix develop
+#+end_src
