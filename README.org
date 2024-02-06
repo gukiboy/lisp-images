@@ -6,3 +6,37 @@ Use the following command to start a terminal with SBCL
 #+begin_src bash
   nix develop
 #+end_src
+
+* Lisp Core Images
+A lisp core image is a binary file of a lisp program in a specific state. It can be obtained by running
+#+begin_src lisp
+  (save-lisp-and-die "filename")
+#+end_src
+On a lisp program. This can only be used if the program has a single thread going.
+
+
+** SLIME
+Since SLIME runs on another thread, we kind of have to kill all
+threads before saving a core image, so, we have to run this function in the inferior buffer:
+#+begin_src lisp
+     ;source http://badbyteblues.blogspot.com/2007/06/save-slime-and-die.html
+    (defun save-slime-and-die (core-file-name)
+      ;; close all
+      (mapcar #'(lambda (x) (swank::close-connection x nil nil)) swank::*connections*)
+      ,#+sb-thread
+      (dolist (thread (remove (swank::current-thread) (swank::all-threads)))
+	(swank::kill-thread thread))
+      (sleep 1)
+      (save-lisp-and-die core-file-name))
+
+  (save-slime-and-die "./core-image")
+ #+end_src
+
+ This kills all the threads and then saves the core image to a file called core-image.
+
+To load it back, the user can run
+#+begin_src command
+  C-u M-x slime on emacs
+  sbcl --core core-image
+#+end_src
+And then, slime REPL will be loaded with the core image.
