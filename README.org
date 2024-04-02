@@ -1,0 +1,268 @@
+#+title: Lisp Core Images
+
+* What?
+Lisp can save its current process with =save-lisp-and-die=. This kills
+the execution but creates what we call a =core file=, with which an
+user can start the lisp REPL again in the exact same state
+
+* Limitations
+
+The function *save-lisp-and-die* is unable to dump multiple threads
+running. This is very bad, because most (if not all) programs in
+production are multithread, and the development process of using
+Common Lisp is also multithread (the program is in one thread and the
+REPL in another).
+
+We must seek a special way to do this, our first trial is
+https://github.com/rolpereira/trivial-dump-core.
+
+
+* Presentation
+
+** Rationale
+Software development usually relies on log and code debugging to find
+errors and unwanted behaviours. Although useful and, in some sense,
+industry standard, it would be nice to have more "in depth"
+approaches.
+
+Debugging is usually only possible locally, because it's the kind of
+thing that stops a software execution in the middle of it; which is
+undesired on production code.
+
+Common Lisp has a way to create a runnable binary from a single
+command, on any point of the code. This is an attempt to use
+=save-lisp-and-die= to imagine and, if possible, create a workflow
+that could rely on executable binaries to debug problematic code.
+
+
+** First, a bit of Lisp
+
+- As the name suggests, Common Lisp is a Lisp
+
+#+begin_src lisp
+(print "Hello world!")
+#+end_src
+
+#+begin_src lisp
+(= 1 1)
+#+end_src
+
+#+begin_src lisp
+(if (= 0 1)
+    "True"
+    "Not True")
+#+end_src
+
+#+RESULTS:
+: Not True
+
+** Writing a basic program and function
+
+- Let's create a bad function
+
+  #+begin_src lisp
+  (defun divide-by-zero (n)
+    (/ n 0))
+  #+end_src
+
+  #+RESULTS:
+  : DIVIDE-BY-ZERO
+
+- Let's try to call it and see what happens
+  
+   #+begin_src lisp
+   (divide-by-zero 1)
+   #+end_src
+
+ #+RESULTS:
+ : You should not divide by zero
+
+- Lisp also can't divide by zero. This is a clear error. We don't exit
+  the REPL, but it's undesired behaviour. Let's handle the error a bit
+  better.
+
+  #+begin_src lisp
+  (defun divide-by-zero (n)
+    (handler-case 
+     (/ n 0)
+      (error (c)
+	(print "You should not divide by zero")))) 
+  #+end_src
+
+  #+RESULTS:
+  : DIVIDE-BY-ZERO
+
+** Creating a small application
+
+
+- What we did up to now doesn't make any sense. Let's write something
+  that makes sense.
+  
+  #+begin_src lisp
+(defun main ()
+  (let ((args sb-ext:*posix-argv*))
+    (print (eval (rest (read-from-string (format nil "~&(~{~A~^ ~})~%" args)))))))
+
+(sb-ext:save-lisp-and-die "calc"
+  :executable t
+  :toplevel 'main)
+  #+end_src
+
+  This is a little quick app that allows us to access Common Lisp
+  super powers from the command line. Quickly:
+
+  - *main*
+
+    The main functions reads the parameters passed to the program
+    through command line using *(args sb-ext:*posix-argv*)*.
+    Specifically, we bind all of the command line arguments to a
+    scoped *args* symbol.
+  
+  - *let body*
+    
+    Remaining code is basically receiving the parameters from the
+    command line, transforming them into an s-expression and
+    evaluating it into Common Lisp.
+
+  - *save-lisp-and-die*
+
+    From the current lisp REPL, we save everything we have and create
+    an executable. This could also be a core image, which we will talk
+    about soon.
+
+*** Let's run it a little bit
+
+Loading this into SBCL, we define a *main* function and then create an
+executable, whose entry point will be the main function.
+
+If we run it, we can execute Common Lisp forms from outside the
+application, like additions and subtractions.
+
+*** Dividing by zero again
+
+We can do the same thing we did last time!
+#+begin_src shell
+./calc / 1 0
+#+end_src
+
+#+RESULTS:
+: debugger invoked on a DIVISION-BY-ZERO @700307E02C in thread
+: #<THREAD "main thread" RUNNING {7005520003}>:
+:   arithmetic error DIVISION-BY-ZERO signalled
+: Operation was (/ 1 0).
+:
+: Type HELP for debugger help, or (SB-EXT:EXIT) to exit from SBCL.
+:
+: restarts (invokable by number or by possibly-abbreviated name):
+:   0: [ABORT] Exit from the current thread.
+:
+: (SB-KERNEL::INTEGER-/-INTEGER 1 0)
+
+- This is a more "real life" example. When we get an exception that is
+  not caught, we end the application execution. Usually, we are able
+  to check what's going on by reading the log, which is possible here.
+
+  However, Common Lisp gives us another option! We can grab the
+  execution and redo the error!
+
+  First, let's try to catch this exception.
+
+  #+begin_src lisp
+
+  (defun main ()
+    (let* ((args sb-ext:*posix-argv*)
+	   (form (rest (read-from-string (format nil "~&(~{~A~^ ~})~%" args)))))
+      (print (handler-case (eval form)
+	       (error ()
+		 (format t "Error! ~&"))))))
+
+  (sb-ext:save-lisp-and-die "calc"
+    :executable t
+    :toplevel 'main)
+
+  #+end_src
+
+  Cool. Now, if we perform any invalid operation, *handler-case* will
+  swallow it and we will spit an error.
+
+  #+begin_src shell
+  ./calc / 1 0
+  > Error! 
+  #+end_src
+
+- Not very compelling. Also, it really doesnt'really help us, in fact, it's worse.
+  However, as said before, we can use *save-lisp-and-die* to do some cool tricks.
+
+  We kind of know what's going on here, We know that we are going to
+  evaluate a form of Common Lisp and want to see some results. What if
+  we saved the form that it's going to be evaluated?
+
+  #+begin_src lisp
+  (defvar *ERRORS*)
+
+  (defun main ()
+    (let* ((args sb-ext:*posix-argv*)
+	   (form (rest (read-from-string (format nil "~&(~{~A~^ ~})~%" args)))))
+      (print (handler-case (eval form)
+	       (error ()
+		 (format t "Error! ~&")
+		 (setf *ERRORS* form)
+		 (sb-ext:save-lisp-and-die "calc-error"))))))
+
+  (sb-ext:save-lisp-and-die "calc"
+    :executable t
+    :toplevel 'main)
+  #+end_src
+
+  Creating our executable and running it will not yield a different
+  result:
+
+  #+begin_src shell
+  ./calc / 1 0
+  > Error! 
+  #+end_src
+
+  However, we can see that the code is a bit different:
+
+  - *let** is actually just a way to bind the symbols one after the other.
+  - *defvar* creates a variable that we called *ERRORS*.
+  - *(setf *ERRORS* form)* sets the value of our to-be evaluated form
+    to the *ERRORS* variable.
+  - And, if we get an error, we create a core file named "calc-error".
+    We can load this file and look at the variable.
+    #+begin_src shell
+    sbcl --core calc-error
+    > *ERRORS*
+    > (/ 1 0)
+    #+end_src
+
+    With this, it's easy to see what was the error.
+
+** What's different?
+
+This is a more sophisticated approach to debugging. In this case,
+we're talking about something specific and known, but this could be
+applied in any other situation: We can save values and inputs from
+functions in a global variable, dump a program on errors and inspect
+those values directly!
+
+** Limitations
+
+Unfortunately, save-lisp-and-die is not prepared to deal with
+multithread programs. For example, if we start an http server and try
+to create a core image, we will receive an error, because it starts
+other threads, so this is currently unable to be directly used at
+modern web applications.
+
+** Why did you do that?
+
+I wanted to inspire myself and, possibly others, to seek crazy old
+school ways to do stuff. This is clearly an unexplored way to do
+stuff. I've found out about this feature through and old work
+colleague and researched it, and a lot of people said that
+theoretically, using this as a way to debug was possible.
+
+I wanted to explore how much of this was viable, and, I conclude that
+it's somewhat, at the very least.
+
+However, maybe we could go further on that.
