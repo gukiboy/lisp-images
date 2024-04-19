@@ -1,25 +1,22 @@
 #+title: Lisp Core Images
 
-* What?
-Lisp can save its current process with =save-lisp-and-die=. This kills
-the execution but creates what we call a =core file=, with which an
-user can start the lisp REPL again in the exact same state
+* Inspiration
 
-* Limitations
+I've found out about this feature through and old work colleague and
+was fascinated.
 
-The function *save-lisp-and-die* is unable to dump multiple threads
-running. This is very bad, because most (if not all) programs in
-production are multithread, and the development process of using
-Common Lisp is also multithread (the program is in one thread and the
-REPL in another).
+A Lisp Core Image is basically a binary that contains all of the
+context of a CL program at a specific point in time, and it can be
+easily created and loaded back into a Common Lisp REPL.
 
-We must seek a special way to do this, our first trial is
-https://github.com/rolpereira/trivial-dump-core.
+Theoretically, you could do this on errors and have some form of
+"image based development", where you would be able to play with the
+execution at that specific point in time.
 
+For me, it's amazing that such an old language has such an advanced
+and interesting feature, while other newer languages don't.
 
-* Presentation
-
-** Rationale
+* Rationale
 Software development usually relies on log and code debugging to find
 errors and unwanted behaviours. Although useful and, in some sense,
 industry standard, it would be nice to have more "in depth"
@@ -34,8 +31,20 @@ command, on any point of the code. This is an attempt to use
 =save-lisp-and-die= to imagine and, if possible, create a workflow
 that could rely on executable binaries to debug problematic code.
 
+* First, a bit of Common Lisp
 
-** First, a bit of Lisp
+** History
+
+Work on Common Lisp started in 1981 after an initiative by ARPA
+manager Bob Engelmore to develop a single community standard Lisp
+dialect.[7] Much of the initial language design was done via
+electronic mail.[8][9] In 1982, Guy L. Steele Jr. gave the first
+overview of Common Lisp at the 1982 ACM Symposium on LISP and
+functional programming.[10]
+
+[[https://en.wikipedia.org/wiki/Common_Lisp][Wikipedia]]
+
+** Code
 
 - As the name suggests, Common Lisp is a Lisp
 
@@ -56,7 +65,7 @@ that could rely on executable binaries to debug problematic code.
 #+RESULTS:
 : Not True
 
-** Writing a basic program and function
+* Writing a basic program and function
 
 - Let's create a bad function
 
@@ -92,8 +101,7 @@ that could rely on executable binaries to debug problematic code.
   #+RESULTS:
   : DIVIDE-BY-ZERO
 
-** Creating a small application
-
+* Creating a small application
 
 - What we did up to now doesn't make any sense. Let's write something
   that makes sense.
@@ -130,7 +138,7 @@ that could rely on executable binaries to debug problematic code.
     an executable. This could also be a core image, which we will talk
     about soon.
 
-*** Let's run it a little bit
+** Let's run it a little bit
 
 Loading this into SBCL, we define a *main* function and then create an
 executable, whose entry point will be the main function.
@@ -138,7 +146,7 @@ executable, whose entry point will be the main function.
 If we run it, we can execute Common Lisp forms from outside the
 application, like additions and subtractions.
 
-*** Dividing by zero again
+** Dividing by zero again
 
 We can do the same thing we did last time!
 #+begin_src shell
@@ -190,7 +198,7 @@ We can do the same thing we did last time!
   > Error! 
   #+end_src
 
-- Not very compelling. Also, it really doesnt'really help us, in fact, it's worse.
+- Not very compelling. Also, it really doesn't really help us, in fact, it's worse.
   However, as said before, we can use *save-lisp-and-die* to do some cool tricks.
 
   We kind of know what's going on here, We know that we are going to
@@ -238,7 +246,134 @@ We can do the same thing we did last time!
 
     With this, it's easy to see what was the error.
 
-** What's different?
+* Doing the same with a modern application
+
+Now, let's try this approach on a modern application. This could mean
+a lot of things, but for the sake of simplicity, let's call a modern
+application our simple HTTP server that is able to receive requests
+from the web.
+
+** Simple web server
+
+#+begin_src lisp
+(load "~/quicklisp/setup.lisp")
+
+(ql:quickload :hunchentoot)
+
+(hunchentoot:define-easy-handler (say-yo :uri "/yo") (name)
+  (setf (hunchentoot:content-type*) "text/plain")
+  (format nil "Hey~@[ ~A~]!" name))
+
+(hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port 4243))
+
+#+end_src
+
+This gives us a little HTTP Server, where you can call like:
+
+http://localhost:4243/yo?name=Gustavo
+
+And get a little hi.
+
+** Simulating an error
+
+Now, what if we get an error?
+
+In this case, I'll just force it.
+
+#+begin_src lisp
+(load "~/quicklisp/setup.lisp")
+
+(ql:quickload :hunchentoot)
+
+(hunchentoot:define-easy-handler (say-yo :uri "/yo") (name)
+  (setf (hunchentoot:content-type*) "text/plain")
+  (error "Could not finish request.") ;; Throwing error
+  (format nil "Hey~@[ ~A~]!" name))
+
+(hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port 4243))
+
+#+end_src
+
+This get's us into the interactive debugger of Common Lisp, from which
+we have access to the REPL and can even retry the last execution. Of
+course, we still get an error from that.
+
+** Catching the error and creating a core image
+
+Let's extract the function and execute it while catching the error.
+
+#+begin_src lisp
+(load "~/quicklisp/setup.lisp")
+
+(ql:quickload :hunchentoot)
+
+(defun print-and-format (name)
+  (error "Could not finish request.");; Throwing error
+  (format nil "Hey~@[ ~A~]!" name))
+
+(hunchentoot:define-easy-handler (say-yo :uri "/yo") (name)
+  (setf (hunchentoot:content-type*) "text/plain")
+  (handler-case     (print-and-format name)
+    (error ()
+      (sb-ext:save-lisp-and-die "calc-error"))))  ;; create image on error
+
+(hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port 4243))
+#+end_src
+
+When accessing http://localhost:4243/yo?name=Gustavo, we get this:
+
+#+begin_example
+[2024-04-19 13:31:25 [ERROR]] Cannot save core with multiple threads running.
+
+                              Interactive thread (of current session):
+                                #<THREAD "main thread" RUNNING {7005530453}>
+
+                              Other threads:
+                                #<THREAD "hunchentoot-listener-*:4243" RUNNING
+                                   {70077582B3}>,
+                                #<THREAD "hunchentoot-worker-127.0.0.1:54357" RUNNING
+                                   {7007AA80C3}>
+See also:
+  The SBCL Manual, Node "Saving a Core Image"
+Backtrace for: #<SB-THREAD:THREAD "hunchentoot-worker-127.0.0.1:54357" RUNNING {7007AA80C3}>
+0: (TRIVIAL-BACKTRACE:PRINT-BACKTRACE-TO-STREAM #<SB-IMPL::STRING-OUTPUT-STREAM {102D70F63}>)
+1: (HUNCHENTOOT::GET-BACKTRACE)
+2: ((LAMBDA (COND) :IN HUNCHENTOOT:HANDLE-REQUEST) #<SB-IMPL::SAVE-WITH-MULTIPLE-THREADS-ERROR {700885EC13}>)
+3: (SB-KERNEL::%SIGNAL #<SB-IMPL::SAVE-WITH-MULTIPLE-THREADS-ERROR {700885EC13}>)
+4: (ERROR #<SB-IMPL::SAVE-WITH-MULTIPLE-THREADS-ERROR {700885EC13}>)
+5: (SB-IMPL::DEINIT)
+6: (SAVE-LISP-AND-DIE "calc-error" :TOPLEVEL NIL :EXECUTABLE NIL :SAVE-RUNTIME-OPTIONS NIL :CALLABLE-EXPORTS NIL :PURIFY T :ROOT-STRUCTURES #<unused argument> :ENVIRONMENT-NAME #<unused argument> :COMPRESSION NIL)
+7: ((:METHOD HUNCHENTOOT:HANDLE-REQUEST (HUNCHENTOOT:ACCEPTOR HUNCHENTOOT:REQUEST)) #<HUNCHENTOOT:EASY-ACCEPTOR (host *, port 4243)> #<HUNCHENTOOT:REQUEST {70085D9383}>) [fast-method]
+8: ((:METHOD HUNCHENTOOT:PROCESS-REQUEST (T)) #<HUNCHENTOOT:REQUEST {70085D9383}>) [fast-method]
+9: (HUNCHENTOOT::DO-WITH-ACCEPTOR-REQUEST-COUNT-INCREMENTED #<HUNCHENTOOT:EASY-ACCEPTOR (host *, port 4243)> #<FUNCTION (LAMBDA NIL :IN HUNCHENTOOT:PROCESS-CONNECTION) {7008380E9B}>)
+10: ((:METHOD HUNCHENTOOT:PROCESS-CONNECTION (HUNCHENTOOT:ACCEPTOR T)) #<HUNCHENTOOT:EASY-ACCEPTOR (host *, port 4243)> #<USOCKET:STREAM-USOCKET {7007AA5DD3}>) [fast-method]
+11: ((:METHOD HUNCHENTOOT:PROCESS-CONNECTION :AROUND (HUNCHENTOOT:ACCEPTOR T)) #<HUNCHENTOOT:EASY-ACCEPTOR (host *, port 4243)> #<USOCKET:STREAM-USOCKET {7007AA5DD3}>) [fast-method]                             
+12: ((:METHOD HUNCHENTOOT::HANDLE-INCOMING-CONNECTION% (HUNCHENTOOT:ONE-THREAD-PER-CONNECTION-TASKMASTER T)) #<HUNCHENTOOT:ONE-THREAD-PER-CONNECTION-TASKMASTER {700713EA73}> #<USOCKET:STREAM-USOCKET {7007AA5DD3}>) [fast-method]
+13: ((LABELS BORDEAUX-THREADS::%BINDING-DEFAULT-SPECIALS-WRAPPER :IN BORDEAUX-THREADS::BINDING-DEFAULT-SPECIALS))
+14: ((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))
+15: ((FLET "WITHOUT-INTERRUPTS-BODY-167" :IN SB-THREAD::RUN))
+16: ((FLET SB-UNIX::BODY :IN SB-THREAD::RUN))
+17: ((FLET "WITHOUT-INTERRUPTS-BODY-160" :IN SB-THREAD::RUN))
+18: (SB-THREAD::RUN)
+#+end_example
+
+Well, that's scary!
+
+Let's focus on the upper part, which is the beginning of our
+problem. Common Lisp tells us we can't save a core with multiple
+threads, which is probably always the case of modern web based
+applications.
+
+This is somewhat of a limitation on using this feature for production
+debugging.
+
+I couldn't figure out another way to do it yet, but we still could use
+a global variable for saving errors and maybe killing all the threads
+but the main one, but this gives us an error for SBCL, and it felt
+like I was twisting something that should not be twisted in such a
+way.
+
+* What's different?
 
 This is a more sophisticated approach to debugging. In this case,
 we're talking about something specific and known, but this could be
@@ -246,23 +381,10 @@ applied in any other situation: We can save values and inputs from
 functions in a global variable, dump a program on errors and inspect
 those values directly!
 
-** Limitations
+* Limitations
 
 Unfortunately, save-lisp-and-die is not prepared to deal with
 multithread programs. For example, if we start an http server and try
 to create a core image, we will receive an error, because it starts
 other threads, so this is currently unable to be directly used at
 modern web applications.
-
-** Why did you do that?
-
-I wanted to inspire myself and, possibly others, to seek crazy old
-school ways to do stuff. This is clearly an unexplored way to do
-stuff. I've found out about this feature through and old work
-colleague and researched it, and a lot of people said that
-theoretically, using this as a way to debug was possible.
-
-I wanted to explore how much of this was viable, and, I conclude that
-it's somewhat, at the very least.
-
-However, maybe we could go further on that.

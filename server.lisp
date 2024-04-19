@@ -1,0 +1,43 @@
+(load "~/quicklisp/setup.lisp")
+
+(ql:quickload :hunchentoot)
+(ql:quickload :series)
+(ql:quickload :gtwiwtg)
+
+(defun print-thread-info ()
+  (let* ((curr-thread (bt:current-thread))
+	 (curr-thread-name (bt:thread-name curr-thread))
+	 (all-threads (bt:all-threads))
+;	 (all-but-current (filter! (lambda (thread) (not (= thread curr-thread))) all-threads))
+	 )
+    (format t "Current thread: ~a~%~%" curr-thread)
+    (format t "Current thread name: ~a~%~%" curr-thread-name)
+    (format t "All threads:~% ~{~a~%~}~%" all-threads)
+    (loop for x in (bt:all-threads)
+	do   (print x))
+ ;   (format t "All but current threads:~% ~{~a~%~}~%" all-but-current)
+    )
+  nil)
+
+(defun interrupt-all-but-current-thread ()
+  (loop for thread in (bt:all-threads)
+	do (if (not (equalp thread (bt:current-thread)))
+	       (bt:interrupt-thread thread (lambda () (format t "Hey!~%") (force-output)))))
+  (sleep 5)
+  (print (bt:all-threads)))
+
+(defun save-and-die ()
+  (interrupt-all-but-current-thread)
+  (save-lisp-and-die "saved.core"))
+
+(defun banana-fn (text)
+  (print text)
+  text)
+
+(hunchentoot:define-easy-handler (say-yo :uri "/yo") (name)
+  (setf (hunchentoot:content-type*) "text/plain")
+  (save-and-die)
+  (banana-fn "BANANA")
+  (format nil "Hey~@[ ~A~]!" name))
+
+(hunchentoot:start (make-instance 'hunchentoot:easy-acceptor :port 4243))
